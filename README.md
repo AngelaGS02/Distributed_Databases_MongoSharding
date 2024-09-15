@@ -7,4 +7,4 @@
 
 ## Database Architecture:
 
-![Alt text for the image](image-url)
+![DB_Architecture.png](https://raw.githubusercontent.com/AngelaGS02/Distributed_Databases_MongoSharding/main/misc/DB_Arquitecture.jpg)
