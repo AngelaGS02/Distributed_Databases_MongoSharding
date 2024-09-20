@@ -23,7 +23,7 @@ We will have:
 ## 1. Pull Mongo, Create Volumes, and Network
 
 ```bash
-docker pull mongo
+docker pull mongo:4.4
 mkdir mongoContainer
 cd mongoContainer
 
@@ -36,13 +36,13 @@ docker network create --driver bridge --subnet 10.0.0.32/28 cr_network
 ## 2. Create the Mongo Cluster (Sharding and Replication)
 
 ```bash
-docker run -d --net cr_network -v vol_cfg_tigrillo:/data/configdb --ip 10.0.0.34 --name cfg_tigrillo mongo mongod --port 27019 --configsvr --replSet "repcfgregister" --dbpath /data/configdb
-docker run -d --net cr_network -v vol_cfg_puma:/data/configdb --ip 10.0.0.35 --name cfg_puma mongo mongod --port 27019 --configsvr --replSet "repcfgregister" --dbpath /data/configdb
+docker run -d --net cr_network -v vol_cfg_tigrillo:/data/configdb --ip 10.0.0.34 --name cfg_tigrillo mongo:4.4 mongod --port 27019 --configsvr --replSet "repcfgregister" --dbpath /data/configdb
+docker run -d --net cr_network -v vol_cfg_puma:/data/configdb --ip 10.0.0.35 --name cfg_puma mongo:4.4 mongod --port 27019 --configsvr --replSet "repcfgregister" --dbpath /data/configdb
 ```
 ### Enter tigrillo Config Server
 
 ```bash
-docker exec -it cfg_tigrillo mongo
+docker exec -it cfg_tigrillo mongo --port 27019
 ```
 
 ### Initialize Replica for Config Servers
@@ -67,23 +67,23 @@ rs.secondaryOk();
 ## 3. Create Shard Servers
 
 ```bash
- docker volume create vol_jaguar
+docker volume create vol_jaguar
 docker volume create vol_manigordo
 docker volume create vol_yaguarundi
 docker volume create vol_margay
 
-docker run -d --net cr_network -v vol_jaguar:/data/db --ip 10.0.0.36 --name jaguar mongo mongod --port 27018 --shardsvr --replSet "rep1" --dbpath /data/db
-docker run -d --net cr_network -v vol_manigordo:/data/db --ip 10.0.0.37 --name manigordo mongo mongod --port 27018 --shardsvr --replSet "rep1" --dbpath /data/db
+docker run -d --net cr_network -v vol_jaguar:/data/db --ip 10.0.0.36 --name jaguar mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep1" --dbpath /data/db
+docker run -d --net cr_network -v vol_manigordo:/data/db --ip 10.0.0.37 --name manigordo mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep1" --dbpath /data/db
 
-docker run -d --net cr_network -v vol_yaguarundi:/data/db --ip 10.0.0.38 --name yaguarundi mongo mongod --port 27018 --shardsvr --replSet "rep2" --dbpath /data/db
-docker run -d --net cr_network -v vol_margay:/data/db --ip 10.0.0.39 --name margay mongo mongod --port 27018 --shardsvr --replSet "rep2" --dbpath /data/db
+docker run -d --net cr_network -v vol_yaguarundi:/data/db --ip 10.0.0.38 --name yaguarundi mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep2" --dbpath /data/db
+docker run -d --net cr_network -v vol_margay:/data/db --ip 10.0.0.39 --name margay mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep2" --dbpath /data/db
 
 ```
 
 ### Initialize Replica for Shards
 
 ```bash
-docker exec -it jaguar mongo
+docker exec -it jaguar mongo --port 27018
 
 rs.initiate({
   _id: "rep1",
@@ -103,7 +103,7 @@ rs.secondaryOk();
 ### Initialize Replica for yaguarundi
 
 ```bash
-docker exec -it yaguarundi mongo
+docker exec -it yaguarundi mongo --port 27018
 
 rs.initiate({
   _id: "rep2",
@@ -115,17 +115,23 @@ rs.initiate({
 
 ```
 
+### Enable Reads for Secondary (Slave)
+
+```bash
+rs.secondaryOk();
+```
+
 ### Set Arbiters for Each Replica
 
 ```bash
-docker run -d --net cr_network --ip 10.0.0.40 --name arbiter_jaguar mongo mongod --port 27018 --replSet "rep1" --dbpath /data/db
-docker run -d --net cr_network --ip 10.0.0.41 --name arbiter_yaguarundi mongo mongod --port 27018 --replSet "rep2" --dbpath /data/db
+docker run -d --net cr_network --ip 10.0.0.40 --name arbiter_jaguar mongo:4.4 mongod --port 27018 --replSet "rep1" --dbpath /data/db
+docker run -d --net cr_network --ip 10.0.0.41 --name arbiter_yaguarundi mongo:4.4 mongod --port 27018 --replSet "rep2" --dbpath /data/db
 ```
 
 ### Add Arbiter for jaguar
 
 ```bash
-docker exec -it jaguar mongo
+docker exec -it jaguar mongo --port 27018
 rs.addArb("10.0.0.40:27018");
 rs.status();
 ```
@@ -133,12 +139,19 @@ rs.status();
 ### Add Arbiter for yaguarundi
 
 ```bash
-docker exec -it yaguarundi mongo
+docker exec -it yaguarundi mongo --port 27018
 rs.addArb("10.0.0.41:27018");
 rs.status();
 ```
 
-## 4. Start and Stop Servers in Order
+## 4. Create Router
+
+```bash
+docker run -d -p 27017:27017 --net cr_network --ip 10.0.0.42 --name router_caucel mongo:4.4 mongos --port 27017 --configdb repcfgregister/10.0.0.34:27019,10.0.0.35:27019
+docker exec -it router_caucel mongo --port 27017
+```
+
+## 5. Start and Stop Servers in Order
 
 ```bash
 docker start jaguar manigordo yaguarundi margay
@@ -154,13 +167,6 @@ docker stop router_caucel
 docker stop arbiter_jaguar arbiter_yaguarundi
 docker stop jaguar manigordo yaguarundi margay
 docker stop cfg_tigrillo cfg_puma
-```
-
-## 5. Create Router
-
-```bash
-docker run -d -p 27017:27017 --net cr_network --ip 10.0.0.42 --name router_caucel mongo mongos --port 27017 --configdb repcfgregister/10.0.0.34:27019,10.0.0.35:27019
-docker exec -it router_caucel mongo
 ```
 
 ## 6. MongoDB Documents
@@ -240,6 +246,9 @@ sh.addShardTag("rep2", "heredia_alajuela_guanacaste");
 ### Add Tag Ranges
 
 ```bash
+
+sh.addTagRange("<database>.<collection>", min, max, "tag");
+
 sh.addTagRange("indigenous_heritage.recipes", { province: 1 }, { province: 4 }, "puntarenas_sj_cartago_limon");
 sh.addTagRange("indigenous_heritage.recipes", { province: 5 }, { province: 7 }, "heredia_alajuela_guanacaste");
 ```
@@ -252,4 +261,9 @@ sh.enableSharding("indigenous_heritage");
 
 ## Load Data from JSON and XLSX Files
 
-Still not completed...
+
+mongoimport --db indigenous_heritage --collection recipes --file recipes.json
+
+// Load csv files
+
+mongoimport --db indigenous_heritage --collection ingredients --type csv --file ingredients.csv --headerline
