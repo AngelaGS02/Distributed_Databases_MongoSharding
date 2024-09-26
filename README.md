@@ -27,51 +27,10 @@ docker pull mongo:4.4
 mkdir mongoContainer
 cd mongoContainer
 
-docker volume create vol_cfg_tigrillo
-docker volume create vol_cfg_puma
-
 docker network create --driver bridge --subnet 10.0.0.32/28 cr_network
 ```
 
-## 2. Crear el Cluster de Mongo (Sharding y Replication)
-
-```bash
-docker run -d --net cr_network -v vol_cfg_tigrillo:/data/configdb --ip 10.0.0.34 --name cfg_tigrillo mongo:4.4 mongod --port 27019 --configsvr --replSet "repcfgregister" --dbpath /data/configdb
-docker run -d --net cr_network -v vol_cfg_puma:/data/configdb --ip 10.0.0.35 --name cfg_puma mongo:4.4 mongod --port 27019 --configsvr --replSet "repcfgregister" --dbpath /data/configdb
-```
-### Entrar al Config Server de tigrillo
-
-```bash
-docker exec -it cfg_tigrillo mongo --port 27019
-```
-
-### Inicializar el Replica para los Config Servers
-
-```bash
-rs.initiate({
-  _id: "repcfgregister",
-  configsvr: true,
-  members: [
-    { _id: 0, host: "10.0.0.34:27019" },
-    { _id: 1, host: "10.0.0.35:27019" }
-  ]
-});
-
-cfg = rs.conf();
-cfg.members[0].priority = 2;
-cfg.members[1].priority = 0.5;
-rs.reconfig(cfg);
-
-
-```
-
-### Habilitar las lecturas para los secundarios (esclavos)
-
-```bash
-rs.secondaryOk();
-```
-
-## 3. Crear los Shard Servers
+## 2. Crear los Shard Servers
 
 ```bash
 docker volume create vol_jaguar
@@ -79,11 +38,13 @@ docker volume create vol_manigordo
 docker volume create vol_yaguarundi
 docker volume create vol_margay
 
-docker run -d --net cr_network -v vol_jaguar:/data/db --ip 10.0.0.36 --name jaguar mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep1" --dbpath /data/db
-docker run -d --net cr_network -v vol_manigordo:/data/db --ip 10.0.0.37 --name manigordo mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep1" --dbpath /data/db
+docker run -d --net cr_network -v vol_jaguar:/data/db --ip 10.0.0.36 --name jaguar mongo:4.4 mongod --port 27018 --bind_ip_all --shardsvr --replSet "rep1" --dbpath /data/db
+docker run -d --net cr_network -v vol_manigordo:/data/db --ip 10.0.0.37 --name manigordo mongo:4.4 mongod --port 27018 --bind_ip_all --shardsvr --replSet "rep1" --dbpath /data/db
 
-docker run -d --net cr_network -v vol_yaguarundi:/data/db --ip 10.0.0.38 --name yaguarundi mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep2" --dbpath /data/db
-docker run -d --net cr_network -v vol_margay:/data/db --ip 10.0.0.39 --name margay mongo:4.4 mongod --port 27018 --shardsvr --replSet "rep2" --dbpath /data/db
+docker run -d --net cr_network -v vol_yaguarundi:/data/db --ip 10.0.0.38 --name yaguarundi mongo:4.4 mongod --port 27018 --bind_ip_all --shardsvr --replSet "rep2" --dbpath /data/db
+docker run -d --net cr_network -v vol_margay:/data/db --ip 10.0.0.39 --name margay mongo:4.4 mongod --port 27018 --bind_ip_all --shardsvr --replSet "rep2" --dbpath /data/db
+
+
 
 ```
 
@@ -161,6 +122,50 @@ rs.addArb("10.0.0.41:27018");
 rs.status();
 ```
 
+## 3. Crear los Config Servers
+
+```bash
+
+docker volume create vol_cfg_tigrillo
+docker volume create vol_cfg_puma
+
+docker run -d --net cr_network -v vol_cfg_tigrillo:/data/configdb --ip 10.0.0.34 --name cfg_tigrillo mongo:4.4 mongod --port 27019 --bind_ip_all --configsvr --replSet "repcfgregister" --dbpath /data/configdb
+docker run -d --net cr_network -v vol_cfg_puma:/data/configdb --ip 10.0.0.35 --name cfg_puma mongo:4.4 mongod --port 27019 --bind_ip_all --configsvr --replSet "repcfgregister" --dbpath /data/configdb
+
+```
+### Entrar al Config Server de tigrillo
+
+```bash
+docker exec -it cfg_tigrillo mongo --port 27019
+
+```
+
+### Inicializar el Replica para los Config Servers
+
+```bash
+rs.initiate({
+  _id: "repcfgregister",
+  configsvr: true,
+  members: [
+    { _id: 0, host: "10.0.0.34:27019" },
+    { _id: 1, host: "10.0.0.35:27019" }
+  ]
+});
+
+cfg = rs.conf();
+cfg.members[0].priority = 2;
+cfg.members[1].priority = 0.5;
+rs.reconfig(cfg);
+```
+
+### Habilitar las lecturas para los secundarios (esclavos)
+
+```bash
+rs.secondaryOk();
+```
+
+
+
 ## 4. Crear el Router
 
 ```bash
@@ -193,6 +198,7 @@ docker stop arbiter_jaguar arbiter_yaguarundi
 docker stop jaguar manigordo yaguarundi margay
 docker stop cfg_tigrillo cfg_puma
 ```
+
 
 ## 6. Documentos de MongoDB
 
@@ -256,8 +262,10 @@ Festividades = {
 ### Agregar Shards
 
 ```bash
+use indigenous_heritage
 sh.addShard("rep1/10.0.0.36:27018");
 sh.addShard("rep2/10.0.0.38:27018");
+sh.enableSharding("indigenous_heritage");
 ```
 
 ### Agregar Tags de Shard
@@ -273,7 +281,8 @@ sh.addShardTag("rep2", "heredia_alajuela_guanacaste");
 
 
 ```bash
-
+db.recipes.createIndex({ province: 1 })
+sh.shardCollection("indigenous_heritage.recipes", { province: 1 })
 sh.addTagRange("indigenous_heritage.recipes", { province: "San Jose" }, { province: "San Jose999"}, "puntarenas_sj_cartago_limon");
 sh.addTagRange("indigenous_heritage.recipes", { province: "Cartago" }, { province: "Cartago999"}, "puntarenas_sj_cartago_limon");
 sh.addTagRange("indigenous_heritage.recipes", { province: "Limon" }, { province: "Limon999"}, "puntarenas_sj_cartago_limon");
@@ -281,6 +290,7 @@ sh.addTagRange("indigenous_heritage.recipes", { province: "Puntarenas" }, { prov
 sh.addTagRange("indigenous_heritage.recipes", { province: "Alajuela" }, { province: "Alajuela999"}, "heredia_alajuela_guanacaste");
 sh.addTagRange("indigenous_heritage.recipes", { province: "Heredia" }, { province: "Heredia999"}, "heredia_alajuela_guanacaste");
 sh.addTagRange("indigenous_heritage.recipes", { province: "Guanacaste" }, { province: "Guanacaste999"}, "heredia_alajuela_guanacaste");
+db.recipes.getShardDistribution()
 ```
 
 ### Agregar Tags de Shard para grupos
@@ -302,11 +312,112 @@ sh.addTagRange("indigenous_heritage.indigenous_groups.location.province", { prov
 sh.enableSharding("indigenous_heritage");
 ```
 
-## Cargar Datos desde archivos JSON y XLSX
+## 9. Cargar Datos desde archivos JSON y XLSX
+
+### Acceder a la carpeta con los datos de prueba
+
+```bash
+cd ..
+cd client
+cd app
+cd data
+```
+
+### Copiar los archivos a la carpeta de la base de datos
+
+```bash
+docker cp recetas.json router_caucel:/recipes.json
+docker cp ingredientes.json router_caucel:/ingredientes.json
+docker cp grupos.json router_caucel:/groups.json
+docker cp festividad.csv router_caucel:/festividad.csv 
+```
+
+### Importar los datos a la base de datos
+
+```bash
+docker exec -it router_caucel mongoimport --db indigenous_heritage --collection recipes --file /recipes.json --jsonArray
+docker exec -it router_caucel mongoimport --db indigenous_heritage --collection indigenous_ingredients --file /ingredientes.json --jsonArray
+docker exec -it router_caucel mongoimport --db indigenous_heritage --collection indigenous_groups --file /groups.json --jsonArray
+docker exec -it router_caucel mongoimport --db indigenous_heritage --collection festivities --file /festividad.csv --type csv --headerline
+```
+
+### Verificar la importacion
+
+```bash
+docker exec -it router_caucel mongo --port 27017
+use indigenous_heritage
+db.recipes.getShardDistribution()
+exit
+```
+### Accedemos a un nodo de la replica 1 para verificar los datos (San Jose, Cartago, Limon, Puntarenas)
+
+```bash
+docker exec -it jaguar mongo --port 27018
+use indigenous_heritage
+db.recipes.find().pretty()
+exit
+```
+
+### Accedemos a otro nodo de la replica 2 para verificar los datos (Heredia, Alajuela, Guanacaste)
+
+```bash
+docker exec -it yaguarundi mongo --port 27018
+use indigenous_heritage
+db.recipes.find().pretty()
+exit
+```
+
+## 10. Probamos la tolerancia a fallos
+
+### Detenemos un nodo de la replica 1 (jaguar) y verificamos que el segundo nodo (manigordo) se convierta en PRIMARY
+
+```bash
+docker stop jaguar
+docker exec -it manigordo mongo --port 27018
+use indigenous_heritage
+db.recipes.find().pretty()
+exit
+```
+
+### Detenemos el nodo PRIMARY de la replica 2 (yaguarundi) y verificamos que el segundo nodo (margay) se convierta en PRIMARY
+
+```bash
+docker stop yaguarundi
+docker exec -it margay mongo --port 27018
+use indigenous_heritage
+db.recipes.find().pretty()
+exit
+```
+### Volvemos a iniciar los nodos detenidos y verificamos que regresen a su estado PRIMARY
+
+```bash
+docker start jaguar yaguarundi
+docker exec -it yaguarundi mongo --port 27018
+use indigenous_heritage
+db.recipes.find().pretty()
+exit
+
+docker exec -it jaguar mongo --port 27018
+use indigenous_heritage
+db.recipes.find().pretty()
+exit
+```
+
+# Conclusión
+
+Con esta guia pudimos crear una base de datos distribuida con 4 shards, 2 config servers y 1 router, ademas de poder agregarle datos y verificar la distribucion y tolerancia a fallos.
+
+Estos servicios usualmente se usan en conjunto con Mongo Express para tener una interfaz grafica y administrar la base de datos de una manera mas sencilla.
+En este repositorio se crea una aplicacion web con NexJS y MongoDB, que usa estas bases de datos distribuidas, permitiendo diferentes operaciones CRUD a las colecciones de la base de datos.
+
+## Ver README.md en la carpeta client para mas detalles de la aplicacion.
 
 
-mongoimport --db indigenous_heritage --collection recipes --file recipes.json
 
-// Cargar archivos csv
 
-mongoimport --db indigenous_heritage --collection ingredients --type csv --file ingredients.csv --headerline
+
+
+
+
+
+
